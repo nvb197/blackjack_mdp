@@ -132,5 +132,9 @@ def test_simulation_agrees_with_the_exact_solution(solution):
 
     mean = total / n
     exact = dp.expected_value(V, allow_double=False)
-    se = 1.14 / np.sqrt(n)  # per-hand standard deviation is close to 1.14
+    # Per-hand standard deviation under optimal hit/stand play, measured at
+    # 0.984 over 300k hands. An earlier version used 1.14 -- the figure for
+    # the game WITH doubling, which this test does not play -- making the
+    # bound about 16% looser than it looked.
+    se = 0.984 / np.sqrt(n)
     assert abs(mean - exact) < 3 * se

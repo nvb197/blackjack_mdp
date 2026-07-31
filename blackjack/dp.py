@@ -73,8 +73,10 @@ def dealer_distribution_from_upcard(upcard: int) -> np.ndarray:
     renormalised by 1 - P(the card that would make a natural).
 
     Omitting that renormalisation shifts the overall expected value by about
-    0.3% and still produces a plausible-looking strategy chart, which is what
-    makes it worth a comment.
+    0.16 percentage points -- measured, -1.087% becomes -1.249% -- while
+    still producing a plausible-looking strategy chart. That combination of
+    "wrong by a visible amount" and "looks fine" is what makes it worth a
+    comment.
     """
     acc = np.zeros(6)
     mass = 0.0
@@ -229,8 +231,8 @@ def action_values(V: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def policy_evaluation(pi: np.ndarray, theta: float = 1e-9) -> np.ndarray:
     """Value of an arbitrary policy -- the same backup without the max.
 
-    This is what turns "the agent disagrees with the optimum in 2 cells out
-    of 200" into "those disagreements cost 1.7 basis points of expected
+    This is what turns "the agent disagrees with the optimum in 3 cells out
+    of 200" into "those disagreements cost 2.47 basis points of expected
     value". A share of matching cells is a coding metric; the cost in basis
     points is the one that would matter to anyone staking money.
     """
