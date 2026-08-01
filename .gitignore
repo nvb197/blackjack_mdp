@@ -2,5 +2,4 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.npz
-docs/06_*
-docs/00_*
+docs/
