@@ -1,10 +1,13 @@
 # Blackjack: an exact solution, and what it is good for
 
 Blackjack dealt with replacement is a finite Markov decision process, so it can
-be solved **exactly** rather than approximately. That exact solution is the
-point of this project — not because the game matters, but because having a
-known-correct answer makes it possible to say precisely how wrong everything
-else is.
+be solved **exactly** rather than approximately — exactly in the sense that the
+transition probabilities are computed from the card distribution rather than
+estimated by simulation, so the only error is floating-point and the stopping
+threshold. (Tightening that threshold from 1e-9 to 1e-12 moves the value
+function by 6e-12.) That solution is the point of this project — not because
+the game matters, but because having a known-correct answer makes it possible
+to say precisely how wrong everything else is.
 
 Four things are built on top of it:
 
@@ -18,8 +21,12 @@ Four things are built on top of it:
    statistical machinery to decide when an edge is real enough to bet on.
 
 ```
-147 tests    2,168 lines of code    1,580 lines of tests
+147 tests    ~650 lines of logic    1,580 lines of tests
 ```
+
+The two source files total 2,168 and 1,580 lines, but most of the first number
+is documentation: stripping docstrings and comments leaves roughly 650 lines of
+actual logic. The problem is small. The point was never the size.
 
 ---
 
@@ -236,8 +243,10 @@ anything, so a caller cannot obtain the wrong one. A second, subtler version —
 sizing on the stale count of a shoe that has just reached penetration and is
 about to be shuffled — is handled by `pre_deal_true_count()`.
 
-Both are pinned by tests, and both are verified by mutation: reintroducing
-either version turns tests red rather than passing quietly.
+Both are pinned by tests. I also checked those tests have teeth by
+reintroducing each bug by hand and confirming tests turn red — but that check
+was run locally and is not part of the repository, so take it as a claim about
+my process rather than something you can reproduce from a clone.
 
 ---
 
@@ -255,8 +264,8 @@ Sorted by how much data supports them:
 | hard 13 vs 2 | 0..1 | stand → **hit** | 20,104 |
 | hard 12 vs 6 | −1..0 | stand → **hit** | 10,948 |
 
-The top row is the most famous index play in blackjack: stand on 16 against a
-ten once the true count reaches zero. The agent found it from nothing but
+The top row is one of the best-known index plays in the counting literature:
+stand on 16 against a ten once the true count reaches zero. The agent found it from nothing but
 sampled rewards, at the threshold the published tables give. Every deviation is
 coherent in direction — 14/15/16 switch to standing when the shoe is ten-rich
 and hitting is more likely to bust, 12/13 switch to hitting when it is low-rich.
@@ -447,8 +456,11 @@ detectable. Prefer designs where a bug cannot happen over designs where it can
 be caught.
 
 **Every random source is created from a seed and passed explicitly.** Nothing
-touches the global numpy state, so a run is reproducible from its seed alone —
-verified bit-identical across Windows and Linux.
+touches the global numpy state, so a run is reproducible from its seed alone.
+Every command in the quick start was run on both Windows (3.12.8) and Linux
+(3.12.3) and compared digit by digit — including the 5-million-hand training
+run and the 400-path bankroll simulation. That is strong evidence, not a
+guarantee: only these commands on these two platforms were compared.
 
 ---
 
