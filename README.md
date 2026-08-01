@@ -23,6 +23,52 @@ Four things are built on top of it:
 
 ---
 
+## Contents
+
+- [Quick start](#quick-start)
+- [Headline results](#headline-results)
+- [Checking the answer](#checking-the-answer)
+- [What the mismatches cost depends on which ones they are](#what-the-mismatches-cost-depends-on-which-ones-they-are)
+- [Two things I got wrong first](#two-things-i-got-wrong-first)
+- [Phase 3: a finite shoe, and card counting](#phase-3-a-finite-shoe-and-card-counting)
+- [Phase 3b: learned index plays](#phase-3b-learned-index-plays)
+- [Phase 4: how much to bet](#phase-4-how-much-to-bet)
+- [Defects found by review, and what they changed](#defects-found-by-review-and-what-they-changed)
+- [Design notes](#design-notes)
+- [Figures](#figures)
+- [Layout](#layout)
+- [Limitations](#limitations)
+
+---
+
+## Quick start
+
+Requires **Python 3.10 or later** — the code uses PEP 604 union syntax
+(`np.random.Generator | None`), which 3.9 does not parse.
+
+```bash
+pip install -r requirements.txt
+
+pytest -m "not slow"     # 146 tests, about 8 seconds
+pytest                   # 147, adds the 1M-hand convergence check
+```
+
+Each command below reproduces one section of this README:
+
+```bash
+python main.py dp --chart --double     # exact solution and strategy chart
+python main.py ql --episodes 5000000   # Q-learning against that solution
+python main.py omega                   # step-size exponent sweep
+python main.py count --hands 3000000   # edge by true count
+python main.py risk --paths 400        # Kelly sizing and risk metrics
+python main.py figures                 # regenerate all five figures
+```
+
+Every number in this document is the output of one of those commands, on the
+seeds committed in the code.
+
+---
+
 ## Headline results
 
 | | computed | published |
@@ -125,6 +171,8 @@ n^−ω. Sweeping ω at a fixed budget of one million hands:
 ω = 1 gives α = 1/n, the exact sample mean, and still satisfies Robbins–Monro
 since Σ1/n diverges while Σ1/n² does not. Roughly a nine-fold improvement over
 ω = 0.6.
+
+![omega sweep](figures/omega.png)
 
 Note the curve **flattens and slightly reverses** at the top: ω = 0.9 and
 ω = 1.0 are indistinguishable. There is a reason. At ω = 1 every sample carries
@@ -419,24 +467,6 @@ third panel, where the gap is smallest.
 
 ---
 
-## Running it
-
-```bash
-pip install -r requirements.txt
-
-pytest -m "not slow"     # 146 tests, about 8 seconds
-pytest                   # 147, adds the 1M-hand convergence check
-
-python main.py dp --chart --double     # exact solution and strategy chart
-python main.py ql --episodes 5000000   # Q-learning against that solution
-python main.py omega                   # step-size exponent sweep
-python main.py count --hands 3000000   # edge by true count
-python main.py risk --paths 400        # Kelly sizing and risk metrics
-python main.py figures                 # regenerate all five figures
-```
-
----
-
 ## Layout
 
 ```
@@ -465,7 +495,6 @@ tests/                147 tests
   test_qlearning_count.py   18    count-augmented agent
   test_simulate.py          12    bet sizing on the pre-deal count, bankroll mechanics
 
-docs/                 a written guide, in Vietnamese
 main.py               command-line entry point
 ```
 
