@@ -240,3 +240,47 @@ def test_summarise_asserts_cvar_above_var_and_reports_everything():
     assert out["cvar"] >= out["var"] - 1e-9
     assert 0.0 <= out["ruin"] <= 1.0
     assert 0.0 <= out["mdd_mean"] <= 1.0
+
+
+def test_tiny_samples_are_refused_even_with_zero_measured_variance():
+    """Two winning hands must not open the gate.
+
+    With n = 2 and both payoffs +1, the measured variance is exactly zero, so
+    the standard error is zero and the lower confidence bound equals the mean:
+    1.0 > 0. The interval test passes and Kelly goes straight to its cap on
+    the strength of two hands. The confidence interval rests on the central
+    limit theorem, which says nothing at n = 2, so a hard floor on sample size
+    is the only thing that closes this door.
+    """
+    t = PreDealTracker()
+    t.record(3.5, 1.0)
+    t.record(3.5, 1.0)
+    s = KellySizer(t)
+    assert s.gated[7], "a two-hand sample opened the significance gate"
+    assert s.bet(3.5, 1000.0) == pytest.approx(1.0)
+
+
+def test_the_sample_floor_can_be_lowered_deliberately():
+    """The floor is a parameter, not a constant, so a caller can study it."""
+    t = PreDealTracker()
+    for _ in range(5):
+        t.record(3.5, 1.0)
+    assert KellySizer(t).gated[7]
+    assert not KellySizer(t, min_samples=2).gated[7]
+
+
+def test_growth_median_counts_ruined_paths():
+    """Filtering to survivors before taking the median is survivorship bias.
+
+    Three paths wiped out and one tripled: the honest median growth is -inf.
+    Reporting the surviving path's growth instead makes a strategy that ruins
+    three quarters of its paths look excellent.
+    """
+    paths = np.array([[100., 50., 0., 0.],
+                      [100., 50., 0., 0.],
+                      [100., 50., 0., 0.],
+                      [100., 150., 250., 300.]])
+    out = risk.summarise(paths, 100.0, alpha=0.9)
+    assert out["growth_median"] == -np.inf
+    assert out["growth_median_survivors"] > 0     # kept, but only for diagnosis
+    assert out["survived"] == pytest.approx(0.25)

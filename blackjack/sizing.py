@@ -121,11 +121,30 @@ so mu-hat is mostly noise. Kelly applied to a noisy estimate does not merely
 add variance -- it systematically overbets, because the sizing rule takes
 whatever mu-hat it is given at face value.
 
-The defence implemented here: bet the minimum unless the LOWER end of the
-confidence interval on the edge is above zero. In plain terms -- only bet
-big when the edge is not just positive, but positive by more than its own
-measurement error. This is exactly the discipline a trading desk applies to
-a signal: size on it only once it clears its estimation noise.
+The defence implemented here has two parts, and the second exists because
+the first alone has a hole.
+
+First: bet the minimum unless the LOWER end of the confidence interval on the
+edge is above zero. Only bet big when the edge is not just positive, but
+positive by more than its own measurement error. That is the discipline a
+trading desk applies to a signal.
+
+Second: refuse outright below MIN_SAMPLES observations. The interval test
+alone can be passed by a sample too small to mean anything. Two hands in a
+rare count bin, both won, give mean = 1.0 and measured variance exactly zero,
+hence a standard error of zero and a lower bound of 1.0 -- which sails
+through the interval test and sends Kelly straight to its cap on the strength
+of two hands. The confidence interval is built on the central limit theorem,
+which says nothing useful at n = 2. A hard floor on sample size is the only
+thing that closes that door.
+
+MIN_SAMPLES = 30 is the conventional rule-of-thumb threshold for the normal
+approximation. It is not derived from anything in this problem; the honest
+statement is that it is a convention chosen to be clearly above the regime
+where the interval is meaningless, not a number this project computed. The
+sample size actually needed to resolve a 1% edge is about 38,000 per bin
+(see `hands_needed_for_significance`), so 30 is a floor against absurdity,
+not a sufficiency test.
 """
 
 import numpy as np
@@ -133,6 +152,7 @@ import numpy as np
 from .counting import PreDealTracker, tc_bin
 
 MIN_BET = 1.0           # in betting units
+MIN_SAMPLES = 30        # below this, no confidence interval is trustworthy
 KELLY_LAMBDA = 0.5      # fractional Kelly multiplier
 KELLY_F_MAX = 0.02      # never stake more than 2% of bankroll
 CI_Z = 1.96             # 95% two-sided
@@ -165,17 +185,21 @@ class KellySizer:
     def __init__(self, tracker: PreDealTracker,
                  lam: float = KELLY_LAMBDA, f_max: float = KELLY_F_MAX,
                  min_bet: float = MIN_BET, z: float = CI_Z,
-                 use_gate: bool = True):
+                 use_gate: bool = True, min_samples: int = MIN_SAMPLES):
         self.lam = lam
         self.f_max = f_max
         self.min_bet = min_bet
         self.use_gate = use_gate
+        self.min_samples = min_samples
         # Precompute per-bin sizing so the hot loop is a single lookup.
         self.fractions = np.zeros(len(tracker.hist))
         self.gated = np.zeros(len(tracker.hist), dtype=bool)
         for b in range(len(tracker.hist)):
             s = tracker.stats(b, z=z)
             if s["n"] == 0:
+                continue
+            if use_gate and s["n"] < self.min_samples:
+                self.gated[b] = True      # too few hands for any interval
                 continue
             if use_gate and not (s["ci_low"] > 0):
                 self.gated[b] = True

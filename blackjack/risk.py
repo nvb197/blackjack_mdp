@@ -94,6 +94,14 @@ infinitely divisible bets, known edge. Blackjack violates all three
 expected only in order of magnitude. Reporting the gap honestly is more
 informative than hiding it.
 
+GROWTH RATE IS REPORTED OVER EVERY PATH
+----------------------------------------
+`growth_median` is the median over all paths, ruined ones included, where a
+ruined path contributes -inf. `growth_median_survivors` is provided beside it
+for diagnosis, but it must never be quoted on its own: conditioning on
+survival is the oldest bias in finance, and it makes a strategy that wipes
+out most of its paths look excellent.
+
 AN HONEST WARNING ABOUT TAIL ESTIMATES
 ---------------------------------------
 A 99% quantile estimated from 1,000 paths rests on about 10 observations.
@@ -232,6 +240,12 @@ def summarise(paths: np.ndarray, initial: float, alpha: float = 0.99,
     mdd = np.array([max_drawdown(p) for p in paths])
     survivors = final > 0
     growth = np.array([growth_rate(initial, f, n_hands) for f in final])
+    # The median is taken over EVERY path, ruined ones included. Filtering to
+    # survivors first is survivorship bias: with three paths ruined and one
+    # tripled, the honest median growth is -inf, but the filtered version
+    # reports the surviving path's growth and makes the strategy look safe.
+    # np.median handles -inf correctly -- it is only infinite when at least
+    # half the paths are.
 
     lo, hi = bootstrap_ci(losses, lambda x: cvar(x, alpha), rng=rng)
     return {
@@ -245,7 +259,8 @@ def summarise(paths: np.ndarray, initial: float, alpha: float = 0.99,
         "mdd_mean": float(mdd.mean()),
         "mdd_worst": float(mdd.max()),
         "ruin": risk_of_ruin(paths, initial, ruin_threshold),
-        "growth_median": float(np.median(growth[survivors]))
+        "growth_median": float(np.median(growth)),
+        "growth_median_survivors": float(np.median(growth[survivors]))
         if survivors.any() else -np.inf,
         "survived": float(survivors.mean()),
     }

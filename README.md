@@ -16,12 +16,13 @@ Four things are built on top of it:
    against that optimum — and its residual error priced in basis points, not
    in "percentage of cells that agree".
 3. **A finite six-deck shoe** with Hi-Lo counting, where the edge stops being
-   constant and becomes something worth measuring.
+   constant and becomes something worth measuring — and where a data leak
+   invalidated a result until an outside reader found it.
 4. **Kelly sizing and risk analytics** on the measured edge, with the
    statistical machinery to decide when an edge is real enough to bet on.
 
 ```
-147 tests    ~650 lines of logic    1,580 lines of tests
+159 tests    ~659 lines of logic    1,844 lines of tests
 ```
 
 The two source files total 2,168 and 1,580 lines, but most of the first number
@@ -38,9 +39,10 @@ actual logic. The problem is small. The point was never the size.
 - [What the mismatches cost depends on which ones they are](#what-the-mismatches-cost-depends-on-which-ones-they-are)
 - [Two things I got wrong first](#two-things-i-got-wrong-first)
 - [Phase 3: a finite shoe, and card counting](#phase-3-a-finite-shoe-and-card-counting)
-- [Phase 3b: learned index plays](#phase-3b-learned-index-plays)
+- [Phase 3b: index plays, and a finding that did not survive](#phase-3b-index-plays-and-a-finding-that-did-not-survive)
 - [Phase 4: how much to bet](#phase-4-how-much-to-bet)
 - [Defects found by review, and what they changed](#defects-found-by-review-and-what-they-changed)
+- [A leak that invalidated Phase 3b, and four smaller defects](#a-leak-that-invalidated-phase-3b-and-four-smaller-defects)
 - [Design notes](#design-notes)
 - [Figures](#figures)
 - [Layout](#layout)
@@ -56,8 +58,8 @@ Requires **Python 3.10 or later** — the code uses PEP 604 union syntax
 ```bash
 pip install -r requirements.txt
 
-pytest -m "not slow"     # 146 tests, about 8 seconds
-pytest                   # 147, adds the 1M-hand convergence check
+pytest -m "not slow"     # 158 tests, about 8 seconds
+pytest                   # 159, adds the 1M-hand convergence check
 ```
 
 Each command below reproduces one section of this README:
@@ -250,32 +252,100 @@ my process rather than something you can reproduce from a clone.
 
 ---
 
-## Phase 3b: learned index plays
+## Phase 3b: index plays, and a finding that did not survive
 
-Adding the count bin to the state (200 → 1600 decision states) and training
-8 million hands, the agent departs from the infinite-deck policy in 51 cells.
-Sorted by how much data supports them:
+This section reported a clean result, then a leak was found upstream of it, and
+rerunning without the leak took the result away. Both versions are shown,
+because the difference is the most useful thing here.
 
-| hand | true count | change | hands seen |
-|---|---|---|---|
-| hard 16 vs 10 | 0..1 | hit → **stand** | 68,681 |
-| hard 15 vs 10 | 1..2 | hit → **stand** | 32,127 |
-| hard 16 vs 10 | 1..2 | hit → **stand** | 30,770 |
-| hard 13 vs 2 | 0..1 | stand → **hit** | 20,104 |
-| hard 12 vs 6 | −1..0 | stand → **hit** | 10,948 |
+Adding the count bin to the state grows it from 200 to 1600 decision states.
+Training 8 million hands and listing every cell where the count-aware policy
+departs from the infinite-deck one:
 
-The top row is one of the best-known index plays in the counting literature:
-stand on 16 against a ten once the true count reaches zero. The agent found it from nothing but
-sampled rewards, at the threshold the published tables give. Every deviation is
-coherent in direction — 14/15/16 switch to standing when the shoe is ten-rich
-and hitting is more likely to bust, 12/13 switch to hitting when it is low-rich.
+| | deviations |
+|---|---|
+| with the hole card counted at the deal (the leak) | 58 |
+| **with the hole card deferred until the hand ends** | **46** |
 
-**But the tails are undersampled and should not be trusted.** The true count is
-bell-shaped around zero, so the extreme bins get a small fraction of the data.
-The least-visited cell has 115 hands against a median of 3,189, while Phase 2
-established the agent's noise floor at around 0.007 — larger than many of the
-value gaps involved. The central-bin deviations are real; the tail ones are
-noise wearing a policy's clothing.
+The leak manufactured about a dozen deviations. More importantly, it moved the
+one that mattered.
+
+### What was claimed
+
+> The top row is one of the best-known index plays in the counting literature:
+> stand on 16 against a ten once the true count reaches zero. The agent found
+> it from nothing but sampled rewards, **at the threshold the published tables
+> give.**
+
+That rested on `hard 16 vs 10` deviating in the `0..1` bin, with 68,681 hands
+behind it — the most-supported deviation in the whole table.
+
+### What the rerun shows
+
+`hard 16 vs 10`, every bin, after the fix. Basic strategy says hit:
+
+| true count | learned | hands |
+|---|---|---|
+| < −3 | hit | 27,425 |
+| −3..−2 | hit | 20,627 |
+| **−2..−1** | **stand** ← deviates | 36,825 |
+| −1..0 | hit | 58,729 |
+| **0..1** | **hit** | **67,777** |
+| 1..2 | stand ← deviates | 32,045 |
+| 2..3 | stand ← deviates | 17,616 |
+| ≥ 3 | stand ← deviates | 22,460 |
+
+**The `0..1` bin went back to hitting.** The threshold moved up one bin, so the
+claim that the agent recovered the published threshold was an artefact of the
+leak, not a finding.
+
+Worse, a deviation appeared at `−2..−1` — standing on 16 against a ten at a
+*negative* count, which is backwards. That cell holds 36,825 hands, so it
+cannot be dismissed as a thin tail. It is simply noise sitting in a
+well-sampled cell, which is what happens when the quantity being resolved
+(exact gap 0.0006) is two orders of magnitude below the estimator's noise
+floor (about 0.007, established in Phase 2).
+
+### What did survive
+
+Counting theory predicts a direction: switch **towards standing** as the count
+rises, **towards hitting** as it falls. Classifying all 46 deviations against
+that rule, rather than picking a few that agree:
+
+| | count |
+|---|---|
+| point the predicted way | 33 |
+| **point the wrong way** | **13 (28%)** |
+| among the 20 best-supported cells | **18 of 20 correct** |
+
+So the direction reproduces **where there is enough data**, and stops
+reproducing where there is not. That is the honest summary, and it is weaker
+than the one this section originally gave.
+
+An earlier draft of this paragraph claimed the direction was "intact across
+every well-sampled hand" and listed four hands that agreed. Four hands chosen
+after seeing the results is not evidence; the table above is what checking all
+46 actually shows. Two of the twenty best-supported cells still point the wrong
+way, including the largest deviation in the whole run.
+
+(The classification is crude near zero: a bin spanning 0..1 is counted as
+"high", so a hand deviating there is scored against the rule even though the
+shoe is close to neutral. Both of the two wrong-way entries in the top twenty
+sit in bins adjacent to zero.)
+
+### The honest conclusion
+
+**The direction of the index plays reproduces. The thresholds do not resolve at
+this sample size, and should not be quoted.** The least-visited cell holds 113
+hands against a median of 3,181; even a cell with 36,825 hands produced a
+deviation pointing the wrong way. Separating a 0.0006 gap from a 0.007 noise
+floor is not a matter of a few more million hands — it needs a different
+estimator, or the exact conditional DP that Phase 3 explains is computationally
+out of reach.
+
+Reporting the direction and refusing to report the threshold is the whole
+lesson of this section. The earlier version did the opposite, and it took an
+outside reader finding a data leak for that to become visible.
 
 ---
 
@@ -317,6 +387,34 @@ These are the exact output of `python main.py risk --paths 400`.
 
 Bet variation alone, with a compulsory minimum bet, does not overcome the house
 edge under these rules. Being able to decline the bad counts does.
+
+**But final bankroll is the wrong metric for that claim, and it took an
+outside eye to notice.** A strategy that sits out 92% of hands wagers a third
+as much money. In a game that is negative-expectation most of the time,
+wagering less trivially loses less — so a higher final bankroll proves nothing
+on its own. The question is whether the money that *was* put at risk earned a
+return.
+
+Measured over 250 paths, return on capital actually wagered. These come from a
+separate run — 250 paths rather than 400, and means rather than medians,
+because a ratio of two running totals is not something a median of final
+bankrolls can be read off. The two tables agree where they overlap: a mean P&L
+of −42.87 is a mean final bankroll of 957, against the 959 median above.
+
+| | mean P&L | mean wagered | **return on capital** | t |
+|---|---|---|---|---|
+| flat 1 unit, must bet | −42.87 | 5,000 | **−0.857%** | −8.32 |
+| half Kelly, sit out | +20.36 | 1,581 | **+1.165%** | **+3.51** |
+| full Kelly, sit out | +40.42 | 3,182 | **+0.948%** | **+2.85** |
+
+This is the figure that settles it. The sit-out strategies are not merely
+losing less by playing less: the capital they deploy earns a positive return,
+significantly so, and the +1.165% is consistent with the +0.890% edge measured
+for the one bin they bet (the intervals overlap).
+
+A caution that comes with it: at 60 paths the same measurement gave −0.076%,
+inside noise of the 250-path figure but of the opposite sign. Anything read off
+a few dozen paths here is not a result.
 
 Full Kelly grows faster than half Kelly and has nearly double the drawdown —
 the expected ordering, and if it were absent that would signal a bug.
@@ -437,6 +535,111 @@ shoe's state count as exceeding the number of seconds since the Big Bang (it is
 
 ---
 
+## A leak that invalidated Phase 3b, and four smaller defects
+
+An outside review found five more defects after everything above was written.
+One of them was serious enough to invalidate a whole section of results.
+
+**The dealer's hole card was counted before the player decided.** Every card
+was folded into the running count the moment it left the shoe — including the
+dealer's face-down card. The count an agent observed therefore encoded the one
+card a real player cannot see. Measured over 3,000 hands, the count **bin** the
+agent saw was changed by the hole card on **19.9% of them**.
+
+An agent trained on that state is not learning index plays. It is learning that
+a lower-than-expected count means the hole card was high, so the dealer is
+strong — reading through the back of a card.
+
+Phase 3b has since been rerun without the leak. The headline finding did not
+survive: the deviation the section was built on, `hard 16 vs 10` at a true
+count of `0..1` with 68,681 hands behind it, went back to hitting, and the
+claim that the agent had recovered the published threshold turned out to be an
+artefact. The direction of the index plays survived; the thresholds did not.
+See that section for the side-by-side.
+
+Nothing crashed. No test failed. The edge curve looked entirely reasonable.
+This is the clearest example in the project of the pattern the section above
+describes, and it survived seven rounds of review before an outside reader
+found it.
+
+The fix is structural: `draw_hole()` takes the card out of the shoe without
+publishing it, and `_reveal_hole()` folds it into the count when the hand ends.
+The infinite-deck environment inherits no-op defaults, so Phase 1 and 2 are
+untouched — and their numbers are unchanged, which is the check that the fix
+did not reach further than intended.
+
+**Four smaller defects, all latent:**
+
+*The standard error divided by n rather than n−1.* `ex2 - mean²` is the
+population variance; the unbiased estimate divides by n−1. The gap is 0.1% at
+n = 1000 but **41% at n = 2**, and it understates the error — the direction
+that lets noise through the significance gate.
+
+*Two hands could open the significance gate.* With n = 2 and both hands won,
+the measured variance is exactly zero, so the standard error is zero and the
+lower confidence bound equals the mean. The interval test passes and Kelly goes
+to its cap on the strength of two hands. The confidence interval rests on the
+central limit theorem, which says nothing at n = 2. Fixed with a hard floor of
+30 observations — a convention, not a number this project derived, and far
+below the ~38,000 per bin actually needed to resolve a 1% edge.
+
+*Growth rate was reported over survivors only.* `np.median(growth[survivors])`
+discards ruined paths before taking the median. With three paths wiped out and
+one tripled, the honest median is −∞; the filtered version reports the
+survivor's growth. Textbook survivorship bias. Now reported over every path,
+with the survivor-only figure kept beside it for diagnosis and never quoted
+alone.
+
+*A bankroll could place a double it could not fund.* `play_hand` did not know
+the bankroll, so a path holding 1.5 units could double a 1-unit stake and lose
+2.0 — clamped to zero, with the shortfall silently absorbed. That is
+uncollateralised credit, and it flatters both drawdown and risk of ruin. At a
+starting bankroll of 1000 it never fires; start at 2 units and it fires on
+about 7% of doubles.
+
+All five are pinned by regression tests, and all five were verified by
+mutation: reintroducing each one turns a test red. The first attempt at the
+double-funding test did **not** catch its mutant — it exercised the parameter
+rather than the caller — which is itself a reminder that a test passing is not
+the same as a test working.
+
+### The question none of the earlier reviews asked
+
+Seven rounds of review missed the hole-card leak. Every one of them asked
+*does the code compute what it claims?* None asked *what is this
+decision-maker allowed to know at the moment it decides?*
+
+That second question now has its own tests. Every decision point in the
+project is enumerated and its information set checked against what a real
+player would hold:
+
+| decision | may know | checked |
+|---|---|---|
+| bet sizing | completed hands only | `test_bet_sizing_sees_only_completed_hands` |
+| playing, count-aware | + own cards, dealer upcard | `test_the_playing_decision_never_sees_the_hole_card` |
+| after a hit | + the card just drawn | `test_a_card_the_player_draws_is_immediately_public` |
+
+The third is the mirror image of the first two and matters just as much:
+withholding information the player *does* have is as wrong as supplying
+information they do not.
+
+That audit found one further defect — introduced by the hole-card fix itself.
+Deferring the card meant an abandoned hand (reset called twice without playing
+out) left it pending, the next deal overwrote the slot, and the card left the
+shoe without ever entering the count. Five abandoned hands were enough for the
+count to drift. `reset()` now publishes any pending card first.
+
+The same audit also cleared a suspected sixth defect. The count bin an agent
+sees correlates with the Hi-Lo value of the hole card (0.24 bins between
+extremes), which looks exactly like residual leakage. It is not: the same
+correlation, 0.20 bins, is present in the **pre-deal** count, which cannot
+contain any information about a card not yet dealt. A ten-rich shoe both
+raises the count and makes the hole card more likely to be a ten. That
+correlation is the mechanism card counting runs on, not a bug — and reporting
+it as one would have been the same error in the opposite direction.
+
+---
+
 ## Design notes
 
 **The step size decays per state-action pair, not on a global clock.** Visit
@@ -497,15 +700,15 @@ blackjack/
   risk.py             VaR, CVaR, drawdown, risk of ruin, bootstrap
   plots.py            the five figures
 
-tests/                147 tests
+tests/                159 tests
   test_rules.py             13    card distribution and hand arithmetic
   test_dp.py                16    exact solution, including a 300k-hand cross-check
   test_qlearning.py         15    update rule, convergence, side-effect freedom
   test_shoe.py              15    composition, conservation, reshuffling
-  test_counting.py          31    Hi-Lo, true count, look-ahead safety
-  test_kelly.py             27    Kelly formula, sizing gate, risk measures
+  test_counting.py          38    Hi-Lo, true count, information sets at each decision
+  test_kelly.py             30    Kelly formula, sizing gate, risk measures
   test_qlearning_count.py   18    count-augmented agent
-  test_simulate.py          12    bet sizing on the pre-deal count, bankroll mechanics
+  test_simulate.py          14    bet sizing, bankroll mechanics, double funding
 
 main.py               command-line entry point
 ```
@@ -521,8 +724,9 @@ Splitting is not implemented, which is worth roughly +0.6% of expected value, so
 where one defect slipped through: a stale function signature that made
 `main.py risk` crash while all 117 tests stayed green.
 
-Index-play results in the tail count bins rest on too little data to be trusted;
-see Phase 3b.
+Index-play thresholds do not resolve at 8 million hands and are not quoted.
+Only the direction is reported; see Phase 3b for why, including a deviation
+pointing the wrong way in a cell holding 36,825 hands.
 
 The risk-of-ruin comparison against the closed form is not a meaningful test at
 this horizon, for the reasons given above.

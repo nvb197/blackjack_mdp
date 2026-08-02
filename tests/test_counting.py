@@ -303,3 +303,178 @@ def test_the_two_environments_agree_on_the_rules():
     assert inf_set == fin_set, "the two environments produce different payoffs"
     # Mimic-the-dealer play loses about 5.7% (Phase 1); both must be close.
     assert abs(inf_mean - fin_mean) < 0.01
+
+
+def test_hole_card_is_not_counted_until_the_hand_ends():
+    """The dealer's face-down card must not enter the count during play.
+
+    THE MOST SERIOUS DEFECT THIS PROJECT HAD. Every card was folded into the
+    running count the moment it left the shoe, including the dealer's hole
+    card. The count an agent observed therefore encoded the one card a real
+    player cannot see -- and measured on 3000 hands, the count BIN the agent
+    saw was changed by the hole card on 19.9% of them.
+
+    An agent trained on that state is not learning index plays. It is
+    learning that a lower-than-expected count means the hole card was high,
+    which means the dealer is strong. Every deviation Phase 3b reported would
+    have been read through the back of a card.
+
+    Nothing crashed, no test failed, and the resulting edge-versus-count
+    curve looked entirely reasonable.
+    """
+    env = FiniteBlackjackEnv(make_rng(3), with_count_state=True)
+    checked = 0
+    for _ in range(300):
+        before = env.shoe.pos
+        running_before = env.running
+        _, info = env.reset()
+        reshuffled = env.shoe.pos < before
+
+        if not reshuffled and not info["done"]:
+            # mid-hand: the count may include the three visible cards only
+            dealt = env.shoe.cards[before:env.shoe.pos]
+            visible = [int(c) for i, c in enumerate(dealt) if i != 3]
+            assert env.running == running_before + running_count(visible), (
+                "the hole card leaked into the count before the decision")
+            checked += 1
+
+        if not info["done"]:
+            done = False
+            while not done:
+                _, _, done, _ = env.step(0)
+
+        # once the hand is over every dealt card, hole included, is counted
+        assert env.running == running_count(env.shoe.cards[:env.shoe.pos])
+    assert checked > 100, "too few hands reached a decision to be meaningful"
+
+
+def test_standard_error_uses_the_sample_variance():
+    """se must divide the population variance by n-1, not n.
+
+    At n = 1000 the difference is 0.1%; at n = 2 it is 41%, and it is in the
+    direction that lets noise through the significance gate.
+    """
+    t = PreDealTracker()
+    for x in (1.0, -1.0, 1.0, -1.0, 1.0):
+        t.record(0.5, x)
+    s = t.stats(tc_bin(0.5))
+    expected = np.sqrt(s["std"] ** 2 / (s["n"] - 1))
+    assert s["se"] == pytest.approx(expected)
+
+
+def test_a_single_observation_has_infinite_standard_error():
+    """One sample says nothing about its own spread."""
+    t = PreDealTracker()
+    t.record(0.5, 1.0)
+    assert np.isinf(t.stats(tc_bin(0.5))["se"])
+
+
+# ------------------------------------------------------- information sets
+#
+# The tests below ask a different question from the rest of the file. They do
+# not ask whether the code computes what it says; they ask what each
+# decision-maker is ALLOWED TO KNOW at the moment it decides, and check that
+# what it actually receives contains no more than that.
+#
+# Seven rounds of correctness review missed the hole-card leak because none of
+# them asked this question. It is the question a trading desk asks first.
+
+def _public_cards(shoe, pos_before, include_hole: bool):
+    """Cards a player may legitimately have seen, given a hand in progress."""
+    prev = list(shoe.cards[:pos_before])
+    dealt = list(shoe.cards[pos_before:shoe.pos])
+    if include_hole:
+        return prev + dealt
+    return prev + [c for i, c in enumerate(dealt) if i != 3]
+
+
+def test_bet_sizing_sees_only_completed_hands():
+    """At bet time, nothing of the hand about to be dealt may be known.
+
+    Decision point: KellySizer.bet, called from bankroll_paths before reset().
+    """
+    env = FiniteBlackjackEnv(make_rng(21), allow_double=True)
+    for _ in range(400):
+        seen = env.shoe.cards[:env.shoe.pos]
+        legal = true_count(running_count(seen), env.shoe.cards_remaining())
+        if not env.shoe.needs_reshuffle():
+            assert env.pre_deal_true_count() == pytest.approx(legal)
+        _, info = env.reset()
+        if not info["done"]:
+            done = False
+            while not done:
+                _, _, done, _ = env.step(0)
+
+
+def test_the_playing_decision_never_sees_the_hole_card():
+    """Mid-hand, the observed count must be reconstructible without the hole card.
+
+    Decision point: the tc_bin in the state handed to CountQLearningAgent.act
+    and to the count-dependent policy lookup in play_hand_count.
+    """
+    env = FiniteBlackjackEnv(make_rng(22), allow_double=True,
+                             with_count_state=True)
+    checked = 0
+    for _ in range(400):
+        pos0 = env.shoe.pos
+        state, info = env.reset()
+        if env.shoe.pos < pos0 or info["done"]:
+            if not info["done"]:
+                done = False
+                while not done:
+                    _, _, done, _ = env.step(0)
+            continue
+        public = _public_cards(env.shoe, pos0, include_hole=False)
+        legal = ct.tc_bin(true_count(running_count(public),
+                                     env.shoe.cards_remaining()))
+        assert state[3] == legal, "the observed bin encodes the hole card"
+        checked += 1
+        done = False
+        while not done:
+            _, _, done, _ = env.step(0)
+    assert checked > 200
+
+
+def test_a_card_the_player_draws_is_immediately_public():
+    """The other direction: the player's own hit card must enter the count at once.
+
+    Deferring it would be the mirror-image error -- withholding information
+    the player does have.
+    """
+    env = FiniteBlackjackEnv(make_rng(23), allow_double=True,
+                             with_count_state=True)
+    checked = 0
+    for _ in range(600):
+        pos0 = env.shoe.pos
+        _, info = env.reset()
+        if env.shoe.pos < pos0 or info["done"]:
+            if not info["done"]:
+                done = False
+                while not done:
+                    _, _, done, _ = env.step(0)
+            continue
+        state, _, done, _ = env.step(1)          # hit
+        if not done:
+            public = _public_cards(env.shoe, pos0, include_hole=False)
+            legal = ct.tc_bin(true_count(running_count(public),
+                                         env.shoe.cards_remaining()))
+            assert state[3] == legal
+            checked += 1
+        while not done:
+            _, _, done, _ = env.step(0)
+    assert checked > 100
+
+
+def test_an_abandoned_hand_does_not_lose_its_hole_card():
+    """Calling reset() twice without playing out must not drop a card.
+
+    A defect introduced by the hole-card fix itself: deferring the card meant
+    an abandoned hand left it pending, the next deal overwrote the slot, and
+    the card left the shoe without ever entering the count. Five abandoned
+    hands were enough for the count to drift.
+    """
+    env = FiniteBlackjackEnv(make_rng(9))
+    for _ in range(5):
+        env.reset()
+    env._reveal_hole()          # publish the hand still in progress
+    assert env.running == running_count(env.shoe.cards[:env.shoe.pos])

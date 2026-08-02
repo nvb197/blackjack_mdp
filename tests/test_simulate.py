@@ -191,3 +191,48 @@ def test_play_hand_returns_a_legal_payoff():
     for _ in range(3_000):
         _, payoff = play_hand(env, pi, should_double)
         assert payoff in legal
+
+
+def test_doubling_is_refused_when_the_bankroll_cannot_cover_it():
+    """A hand cannot place a second stake the bankroll cannot pay.
+
+    Starting at 2 units against a 1-unit minimum, roughly 7% of doubles were
+    previously placed without the funds to cover them. The loss was clamped
+    at zero, so the casino silently absorbed the shortfall -- uncollateralised
+    credit, which flatters both drawdown and risk of ruin.
+    """
+    pi, should_double = basic_strategy(allow_double=True)
+    env = FiniteBlackjackEnv(np.random.default_rng(500), allow_double=True)
+    for _ in range(2000):
+        # bankroll below twice the stake: doubling must never happen
+        _, payoff = play_hand(env, pi, should_double, can_double=False)
+        assert abs(payoff) != 2.0, "doubled without the funds to cover it"
+
+
+def test_bankroll_paths_refuse_doubles_they_cannot_fund():
+    """A path below twice the stake must never lose more than one stake.
+
+    This is the check that actually detects unfunded doubling, and my first
+    attempt at it did not. Testing play_hand(can_double=False) directly only
+    proves the parameter works; it says nothing about whether bankroll_paths
+    passes the right value. The clamp at zero also hides the symptom -- a
+    bankroll of 1.5 losing a 2-unit double simply lands on 0, which looks
+    like any other ruin.
+
+    The signature that survives the clamp: with a flat 1-unit stake, a
+    bankroll below 2.0 cannot fund a double, so a single hand may cost at
+    most 1.0. A larger drop in that regime means a double was placed on
+    credit.
+    """
+    paths = bankroll_paths(FlatSizer(1.0), n_paths=40, n_hands=300,
+                           initial=2.0, seed=500)
+    assert np.all(paths >= 0.0)
+
+    unfunded = 0
+    for p in paths:
+        for before, after in zip(p[:-1], p[1:]):
+            if 0.0 < before < 2.0 and (before - after) > 1.0 + 1e-9:
+                unfunded += 1
+    assert unfunded == 0, (
+        f"{unfunded} hands lost more than one stake while unable to fund a "
+        "double -- the casino absorbed the shortfall")

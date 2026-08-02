@@ -44,13 +44,21 @@ def basic_strategy(allow_double: bool = True):
 
 
 def play_hand(env: FiniteBlackjackEnv, pi: np.ndarray,
-              should_double: np.ndarray) -> tuple[float, float]:
+              should_double: np.ndarray,
+              can_double: bool = True) -> tuple[float, float]:
     """Play one hand to completion. Returns (pre_deal_tc, payoff).
 
     The payoff is in units of the base bet: sizing is applied later, by
-    multiplying this number. Keeping the two apart is the same separation
-    of concerns described in sizing.py -- the hand does not know how much
-    money is on it.
+    multiplying this number. Keeping the two apart is the separation of
+    concerns described in sizing.py -- the hand does not know how much money
+    is on it.
+
+    `can_double` is the one place that separation has to be broken. Doubling
+    puts a second stake on the table, and a player who cannot cover it is not
+    allowed to double. Leaving that out lets a bankroll of 1.2 units place a
+    2-unit double and lose 2.4, with the shortfall silently absorbed by the
+    max(..., 0) clamp -- the casino extending uncollateralised credit. The
+    caller passes False when the bankroll cannot cover twice the stake.
     """
     (t, up, soft), info = env.reset()
     tc = info["pre_deal_tc"]
@@ -62,7 +70,7 @@ def play_hand(env: FiniteBlackjackEnv, pi: np.ndarray,
     reward = 0.0
     while not done:
         s = int(soft)
-        if first and env.allow_double and should_double[t, up - 1, s]:
+        if first and can_double and env.allow_double and should_double[t, up - 1, s]:
             action = DOUBLE
         else:
             action = HIT if pi[t, up - 1, s] == 1 else STAND
@@ -71,7 +79,8 @@ def play_hand(env: FiniteBlackjackEnv, pi: np.ndarray,
     return tc, reward
 
 
-def play_hand_count(env, pi_count, should_double) -> tuple[float, float]:
+def play_hand_count(env, pi_count, should_double,
+                    can_double: bool = True) -> tuple[float, float]:
     """Play one hand with a COUNT-DEPENDENT policy. Returns (pre_deal_tc, payoff).
 
     `pi_count` is indexed [total, upcard-1, soft, tc_bin]. The environment
@@ -85,7 +94,8 @@ def play_hand_count(env, pi_count, should_double) -> tuple[float, float]:
     first, done, reward = True, False, 0.0
     while not done:
         sft = int(soft)
-        if first and env.allow_double and should_double[t, up - 1, sft]:
+        if (first and can_double and env.allow_double
+                and should_double[t, up - 1, sft]):
             action = DOUBLE
         else:
             action = HIT if pi_count[t, up - 1, sft, b] == 1 else STAND
@@ -125,6 +135,13 @@ def bankroll_paths(sizer, n_paths: int, n_hands: int, initial: float = 1000.0,
     A path that reaches zero stops: the remaining columns are filled with
     zero rather than allowed to go negative, because a bankroll cannot be
     less than nothing and ruin is absorbing.
+
+    Doubling is refused when the bankroll cannot cover twice the stake. That
+    check has to live here rather than in play_hand, because it is the only
+    place that knows the bankroll -- and without it a nearly-broke path can
+    place a double it cannot pay for, with the shortfall clamped away at
+    zero. At a starting bankroll of 1000 against a 1-unit minimum this never
+    fires; start at 2 units and it fires on about 7% of doubles.
     """
     pi, should_double = basic_strategy(allow_double)
     use_count = pi_count is not None
@@ -140,10 +157,12 @@ def bankroll_paths(sizer, n_paths: int, n_hands: int, initial: float = 1000.0,
                 out[p, h + 1:] = 0.0
                 break
             stake = sizer.bet(env.pre_deal_true_count(), bank)
+            can_double = bank >= 2.0 * stake
             if use_count:
-                tc, payoff = play_hand_count(env, pi_count, should_double)
+                tc, payoff = play_hand_count(env, pi_count, should_double,
+                                             can_double)
             else:
-                tc, payoff = play_hand(env, pi, should_double)
+                tc, payoff = play_hand(env, pi, should_double, can_double)
             bank = max(bank + stake * payoff, 0.0)
             out[p, h + 1] = bank
     return out

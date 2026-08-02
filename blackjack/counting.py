@@ -174,13 +174,27 @@ class PreDealTracker:
     def stats(self, b: int, z: float = 1.96) -> dict:
         """Mean, standard deviation, E[X^2] and a confidence interval for a bin.
 
-        The interval is the ordinary CLT one, mu_hat +- z * sigma_hat/sqrt(n).
-        Note it is NOT a Wilson interval: Wilson is for a binomial
-        proportion, and the payoff here takes six distinct values, not two.
-        Reaching for Wilson because "it's about win rate" is a common slip.
+        The interval is the ordinary CLT one, mu_hat +- z * se. Note it is NOT
+        a Wilson interval: Wilson is for a binomial proportion, and the payoff
+        here takes six distinct values, not two. Reaching for Wilson because
+        "it's about win rate" is a common slip.
 
-        Returns n = 0 with everything else nan when the bin is empty, so
-        callers can detect it rather than divide by zero.
+        THE STANDARD ERROR USES n-1, NOT n
+        -----------------------------------
+        `ex2 - mean**2` is the POPULATION variance -- it divides by n. The
+        unbiased estimate of the variance from a sample divides by n-1, so
+
+            se = sqrt(population_variance / (n - 1))
+
+        which is the same as sample_std / sqrt(n). Using sqrt(n) on the
+        population variance understates the standard error by sqrt((n-1)/n):
+        0.1% at n = 1000, but 41% at n = 2. Since the significance gate in
+        sizing.py compares mu_hat against z*se, understating se at small n is
+        exactly the direction that lets noise through.
+
+        Returns n = 0 with everything else nan when the bin is empty, and
+        se = inf when n = 1, since one observation carries no information
+        about its own spread.
         """
         counts = self.hist[b]
         n = int(counts.sum())
@@ -190,9 +204,9 @@ class PreDealTracker:
         p = counts / n
         mean = float((p * PAYOFFS).sum())
         ex2 = float((p * PAYOFFS ** 2).sum())
-        var = max(ex2 - mean ** 2, 0.0)
+        var = max(ex2 - mean ** 2, 0.0)          # population variance
         std = float(np.sqrt(var))
-        se = std / np.sqrt(n)
+        se = float(np.sqrt(var / (n - 1))) if n > 1 else float("inf")
         return {"n": n, "mean": mean, "std": std, "ex2": ex2, "se": se,
                 "ci_low": mean - z * se, "ci_high": mean + z * se}
 

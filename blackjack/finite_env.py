@@ -52,6 +52,7 @@ class FiniteBlackjackEnv(HandPlay):
         self.allow_double = allow_double
         self.with_count_state = with_count_state
         self.running = 0
+        self._pending_hole: int | None = None
         self._done = True
 
     # ------------------------------------------------------------------ #
@@ -90,6 +91,25 @@ class FiniteBlackjackEnv(HandPlay):
         self.running += int(HILO[c])
         return c
 
+    def draw_hole(self) -> int:
+        """Take the dealer's face-down card out of the shoe without counting it.
+
+        The card has physically left the shoe, so `cards_remaining` drops and
+        the composition changes. But it is face down, so it must not enter the
+        running count until the hand ends -- otherwise the count an agent
+        observes encodes the one card a real player cannot see, and Phase 3b
+        would be learning to read the hole card rather than to count.
+        """
+        c = self.shoe.draw()
+        self._pending_hole = c
+        return c
+
+    def _reveal_hole(self) -> None:
+        """Fold the hole card into the running count once the hand is over."""
+        if self._pending_hole is not None:
+            self.running += int(HILO[self._pending_hole])
+            self._pending_hole = None
+
     def _state(self):
         if self.with_count_state:
             return (self.player_total, self.dealer_upcard, self.player_soft,
@@ -100,7 +120,17 @@ class FiniteBlackjackEnv(HandPlay):
     # hand lifecycle
     # ------------------------------------------------------------------ #
     def reset(self):
-        """Start a new hand. See the module docstring on line ordering."""
+        """Start a new hand. See the module docstring on line ordering.
+
+        The first act is to publish any hole card still pending. Normally the
+        previous hand ended and published its own, but a caller can abandon a
+        hand -- call reset() twice without playing the first out. Without this
+        line that card would leave the shoe and never enter the count, and the
+        running count would drift silently away from the cards actually dealt.
+        By the time a new hand begins, every card of the previous one is
+        public, so this is also the correct moment semantically.
+        """
+        self._reveal_hole()
         pre_deal_tc = self.pre_deal_true_count()  # BEFORE anything is dealt
         if self.shoe.maybe_reshuffle():           # between hands only
             self.running = 0

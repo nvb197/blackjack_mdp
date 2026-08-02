@@ -54,9 +54,27 @@ The fix is a 2x2 experiment on identical seeds:
 
 Then (a) - baseline isolates the value of sizing, (b) - baseline isolates the
 value of count-dependent play, and (c) shows whether they add up or interact.
+
 Published work (Griffin, Wong) puts bet variation at roughly 90% of the total
-benefit of counting and index plays at roughly 10%; reproducing that split
-is an independent check against the literature.
+benefit of counting and index plays at roughly 10%. That split is NOT
+reproduced here, and the experiment as run cannot reproduce it: measured on
+400 paired paths, bet sizing is worth +61.45 with t = 12.80 while
+count-dependent play is worth +4.41 with t = 1.74 -- a term indistinguishable
+from zero. A percentage split cannot be taken of a quantity whose sign is
+uncertain. The direction agrees with the literature; the ratio is not
+something this sample size can supply.
+
+WHAT THIS MODULE PRODUCED, AND WHAT HAPPENED TO IT
+---------------------------------------------------
+The first run of this module reported that the agent had recovered the
+best-known index play -- stand on hard 16 against a ten once the true count
+reaches zero -- at exactly the published threshold, with 68,681 hands behind
+it. That was an artefact of a data leak: the dealer's face-down card was being
+folded into the count before the agent decided (see finite_env.draw_hole).
+Rerun without the leak, that cell goes back to hitting and the threshold moves
+up one bin, while a deviation pointing the wrong way appears in a cell holding
+36,825 hands. The direction of the index plays reproduces; the thresholds do
+not resolve at this sample size and should not be quoted. See the README.
 """
 
 import numpy as np

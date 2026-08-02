@@ -27,6 +27,32 @@ abstract when you have two real cases, not when you imagine you might.
 Subclasses must provide:
     draw()    -> int          deal one card
     _state()  -> tuple        the observation handed to an agent
+
+Subclasses may override:
+    draw_hole()    -> int     deal the dealer's face-down card
+    _reveal_hole() -> None    called when the hand ends and it becomes public
+
+THE HOLE CARD IS NOT PUBLIC INFORMATION
+----------------------------------------
+The dealer's second card is dealt face down. A player -- and therefore any
+agent standing in for one -- cannot see it while deciding. In the
+infinite-deck environment this is irrelevant, because nothing observable
+depends on which cards have left the deck. On a finite shoe it matters a
+great deal: if the hole card were folded into the running count at the deal,
+the count an agent observes would encode the one card it is not allowed to
+know, and any policy learned on that count would be reading through the back
+of a card rather than doing arithmetic.
+
+The two hooks below keep that impossible. `draw_hole` takes the card out of
+the shoe (it has physically left, so the composition changes) without
+publishing it; `_reveal_hole` publishes it when the hand ends. The default
+implementations are plain pass-throughs, so the infinite-deck environment
+is unaffected.
+
+Modelling note: the hole card is treated as revealed at the end of every
+hand, including hands where the player busts. Some casinos return it face
+down in that case, which would leave a real counter's count slightly stale.
+Modelling that would be more faithful and is not done here.
 """
 
 from .rules import (
@@ -54,6 +80,13 @@ class HandPlay:
     def _state(self):
         raise NotImplementedError
 
+    def draw_hole(self) -> int:
+        """Deal the dealer's face-down card. Public information by default."""
+        return self.draw()
+
+    def _reveal_hole(self) -> None:
+        """The hand has ended; the hole card is now public. No-op by default."""
+
     # -------------------------------------------------------------- #
     # shared rules
     # -------------------------------------------------------------- #
@@ -68,7 +101,7 @@ class HandPlay:
         """
         p1, p2 = self.draw(), self.draw()
         self.dealer_upcard = self.draw()
-        self.dealer_hole = self.draw()
+        self.dealer_hole = self.draw_hole()   # out of the shoe, not yet public
         self.player_total, self.player_soft = hand_value([p1, p2])
         self.first_decision = True
         self._done = False
@@ -80,6 +113,7 @@ class HandPlay:
         info = {"done": False, "reward": 0.0}
         if player_bj or (DEALER_PEEKS and dealer_bj):
             self._done = True
+            self._reveal_hole()
             info["done"] = True
             if player_bj and dealer_bj:
                 info["reward"] = 0.0
@@ -114,7 +148,9 @@ class HandPlay:
 
         if action == STAND:
             self._done = True
-            return self._state(), self._showdown(), True, {}
+            reward = self._showdown()
+            self._reveal_hole()
+            return self._state(), reward, True, {}
 
         self.player_total, self.player_soft = add_card(
             self.player_total, self.player_soft, self.draw())
@@ -123,9 +159,11 @@ class HandPlay:
         if action == DOUBLE:
             self._done = True
             reward = -2.0 if bust else self._showdown(bet=2.0)
+            self._reveal_hole()
             return self._state(), reward, True, {}
 
         if bust:
             self._done = True
+            self._reveal_hole()
             return self._state(), -1.0, True, {}
         return self._state(), 0.0, False, {}
