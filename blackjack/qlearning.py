@@ -13,11 +13,10 @@ Two design choices follow from those conditions.
 The step size decays per state-action pair, alpha = N(s,a)^-omega with N
 counting visits from 1, not on a global clock. Visit frequencies are very
 uneven -- hard 12 against a six comes up orders of magnitude more often than
-soft 21 against an ace (measured 135x between the most and least visited
-cell of the decision region) -- so
-a global clock would drive the step size to zero at rare states that have
-barely been updated, and Robbins-Monro would fail exactly where the estimates
-are worst.
+soft 21 against an ace (measured 135x between the most and least visited cell
+of the decision region). A global clock would drive the step size to zero at
+rare states that have barely been updated, and Robbins-Monro would fail
+exactly where the estimates are worst.
 
 Exploration decays to a floor rather than to zero, which keeps every pair
 reachable. That is safe here only because Q-learning is off-policy: the max
@@ -130,7 +129,7 @@ def train(agent: QLearningAgent, env: BlackjackEnv, n_episodes: int,
     must not be credited to one, or every state with a total of 21 picks up
     a bias. The periodic evaluation deliberately sits outside that skip:
     using ``continue`` would silently drop any checkpoint that happened to
-    land on a natural, which is about eight per cent of hands.
+    land on a natural, which is about 9% of hands (see hand.py).
     """
     history: list[dict] = []
     for ep in range(n_episodes):

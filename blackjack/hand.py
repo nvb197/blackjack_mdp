@@ -62,10 +62,9 @@ class HandPlay:
 
         A natural on either side ends the hand before any decision is made,
         which happens on roughly 9% of hands (9.1% measured over 300k deals).
-        reset() cannot return a reward (its signature only returns a state),
-        so the outcome is reported
-        through info -- and a learning agent must skip these hands entirely,
-        because the reward belongs to no action.
+        reset() cannot return a reward -- its signature only returns a state
+        -- so the outcome is reported through info, and a learning agent must
+        skip these hands entirely, because the reward belongs to no action.
         """
         p1, p2 = self.draw(), self.draw()
         self.dealer_upcard = self.draw()
