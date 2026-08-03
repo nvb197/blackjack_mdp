@@ -1,40 +1,54 @@
-# Blackjack: an exact solution, and what it is good for
+# Does reinforcement learning actually work on blackjack?
 
-Blackjack dealt with replacement is a finite Markov decision process, so it can
-be solved **exactly** rather than approximately — exactly in the sense that the
-transition probabilities are computed from the card distribution rather than
-estimated by simulation, so the only error is floating-point and the stopping
-threshold. (Tightening that threshold from 1e-9 to 1e-12 moves the value
-function by 6e-12.) That solution is the point of this project — not because
-the game matters, but because having a known-correct answer makes it possible
-to say precisely how wrong everything else is.
+That question is usually unanswerable. An RL agent produces a policy, the
+policy looks sensible, and there is nothing to check it against — so "it works"
+means "the loss curve went down" and nobody can say by how much it is wrong.
 
-Four things are built on top of it:
+Blackjack dealt with replacement is the rare case where the question is
+**decidable**. It is a finite Markov decision process, small enough to solve
+exactly by dynamic programming: the transition probabilities come from the card
+distribution rather than from simulation, so the only error is floating-point
+and the stopping threshold. (Tightening that threshold from 1e-9 to 1e-12 moves
+the value function by 6e-12.) That gives a ground-truth `Q*` to hold a learned
+`Q` against.
 
-1. **The exact optimum** by value iteration, matched against published figures.
-2. **A model-free agent** (Q-learning) that knows none of the rules, checked
-   against that optimum — and its residual error priced in basis points, not
-   in "percentage of cells that agree".
-3. **A finite six-deck shoe** with Hi-Lo counting, where the edge stops being
-   constant and becomes something worth measuring — and where a data leak
-   invalidated a result until an outside reader found it.
-4. **Kelly sizing and risk analytics** on the measured edge, with the
-   statistical machinery to decide when an edge is real enough to bet on.
+So the project is really one experiment run four times, each time asking the
+same question of a harder problem:
+
+1. **Tabular Q-learning against `Q*`.** Off-policy TD control, 200 states, no
+   knowledge of the rules. Does it converge to the optimum, and if not, what
+   does the gap cost — in money, not in "percentage of cells that agree"?
+2. **Does the step size matter more than the algorithm?** A convergence
+   plateau that turned out to be bias rather than noise, and what diagnosing
+   it required.
+3. **What happens when the state stops being sufficient.** A six-deck shoe
+   makes the process non-stationary; a Hi-Lo count is a lossy compression of
+   the state. Learning over the compressed state produced a clean, publishable
+   result — which turned out to be a **data leak**, and did not survive the
+   fix.
+4. **From a value function to a bet size.** Kelly on a measured edge, and the
+   statistics needed to decide when an edge is real enough to size on at all.
+
+The short answers, spelled out in
+[the verdict](#so-does-it-work) below: **yes** for the tabular case, to within
+2.47 basis points; **no** for the count-augmented case, at any sample size this
+project can reach.
 
 ```
 159 tests    ~659 lines of logic    1,844 lines of tests
 ```
 
-The two source files total 2,168 and 1,580 lines, but most of the first number
-is documentation: stripping docstrings and comments leaves roughly 650 lines of
-actual logic. The problem is small. The point was never the size.
+The source is 2,168 lines, but most of that is documentation: stripping
+docstrings and comments leaves roughly 650 lines of logic. The problem is
+small. The point was never the size.
 
 ---
 
 ## Contents
 
 - [Quick start](#quick-start)
-- [Headline results](#headline-results)
+- [So does it work?](#so-does-it-work)
+- [The ground truth everything is measured against](#the-ground-truth-everything-is-measured-against)
 - [Checking the answer](#checking-the-answer)
 - [What the mismatches cost depends on which ones they are](#what-the-mismatches-cost-depends-on-which-ones-they-are)
 - [Two things I got wrong first](#two-things-i-got-wrong-first)
@@ -78,7 +92,96 @@ seeds committed in the code.
 
 ---
 
-## Headline results
+## So does it work?
+
+Four questions, four answers, all measured rather than asserted.
+
+### 1. Does tabular Q-learning reach the optimum? — Yes, to 2.47 bps
+
+Five million hands of off-policy TD control, starting from a table of zeros and
+knowing nothing about card probabilities or the dealer's rule:
+
+| | |
+|---|---|
+| mean squared error against `V*` | 6.5 × 10⁻⁵ |
+| decisions matching `π*` | 98.5% (197 of 200) |
+| **cost of the remaining mismatches** | **2.47 bps** |
+
+The last line is what "works" should mean. Three cells still disagree — but
+evaluating the learned policy exactly (the same Bellman backup without the max)
+prices that disagreement at 2.47 basis points against a house edge of 242. The
+agent recovers about 99% of the available value from sampled rewards alone.
+
+### 2. Does the step size matter? — More than expected
+
+With the conventional α = n^−0.6, the error plateaued and only 96% of decisions
+matched. The diagnosis mattered more than the fix: **every mismatch went the
+same way**, and a one-sided error is bias, not variance. No amount of extra
+training would have helped. Moving to α = n^−1 — the exact running sample mean,
+still satisfying Robbins–Monro — improved the error ninefold.
+
+The sweep also revealed something the theory does not predict: the curve
+**flattens and slightly reverses** at ω = 1, because at that value the earliest
+updates keep full weight forever, and their targets were bootstrapped from an
+empty table. That is a TD-specific effect; Monte Carlo averaging would not show
+it.
+
+### 3. Does it still work when the state is no longer sufficient? — No
+
+A six-deck shoe makes the process non-stationary. Keeping it Markov would need
+the full shoe composition in the state — about 7.4 × 10¹⁶ states — so the
+standard move is to compress it into one number, the Hi-Lo true count, and
+learn over that instead. It is a lossy compression: the count cannot
+distinguish which small card left the shoe.
+
+Learning over the augmented state (200 → 1600 states, 8 million hands) produced
+a result that looked like a success — the agent appeared to recover a known
+index play at exactly the published threshold. It was an artefact of **a data
+leak in the state representation**: the dealer's face-down card was being
+folded into the count before the agent decided, changing the observed bin on
+19.9% of hands. The agent was not learning to count. It was learning to read
+through the back of a card.
+
+Rerun without the leak, the finding disappears. Of 46 deviations, 13 point the
+wrong way; the largest deviation in the entire run is one of them. The
+direction reproduces where data is thick (18 of the 20 best-supported cells)
+and stops where it is thin.
+
+**The honest answer is that this scale of experiment cannot resolve the
+question.** The quantities being estimated are around 0.0006 to 0.02; the
+estimator's noise floor, established in step 1, is about 0.007. More hands do
+not fix a two-order-of-magnitude mismatch.
+
+### 4. Does a value function turn into a bet size? — Yes, with statistics attached
+
+Kelly sizing on the measured edge, evaluated out of sample:
+
+| | return on capital wagered | t |
+|---|---|---|
+| flat betting, must bet every hand | −0.857% | −8.32 |
+| half Kelly, allowed to decline bad counts | **+1.165%** | **+3.51** |
+
+But the significance gate refuses **7 of 8** count bins: an edge estimated from
+a finite sample is mostly noise, and Kelly applied to a noisy estimate does not
+merely add variance — it systematically overbets. Deciding when *not* to act on
+a learned value is as much of the problem as learning it.
+
+### The pattern across all four
+
+RL worked where the state was genuinely sufficient and the signal was well
+above the noise floor. It failed where the state was a lossy compression and
+the signal sat below it — and in that second case it failed **while producing
+output that looked like success**, until a data leak was found by someone
+reading the code from outside.
+
+That is not a blackjack result. It is the ordinary failure mode of applied RL,
+made visible here only because an exact answer existed to check against.
+
+---
+
+## The ground truth everything is measured against
+
+Value iteration on the infinite-deck MDP, 200 decision states, no discounting:
 
 | | computed | published |
 |---|---|---|
@@ -87,21 +190,15 @@ seeds committed in the code.
 | Expected return, doubling allowed | **−1.087%** | −1.087% |
 | Value of the option to double | +1.334% | |
 
-Tabular Q-learning over 5 million hands, against that exact solution:
+γ = 1 costs the Bellman operator its contraction property, so convergence does
+not follow from the usual fixed-point argument. It follows instead from the
+episode structure: every hit strictly increases the player's total, which is
+bounded at 21, so no policy can play forever. That makes this a stochastic
+shortest-path problem with every policy proper, where the fixed point is still
+unique. Thirteen sweeps to a sup-norm change below 1e-9.
 
-| | |
-|---|---|
-| mean squared error against V\* | 6.5 × 10⁻⁵ |
-| decisions matching the optimal policy | 98.5% (197 of 200) |
-| **cost of the remaining mismatches** | **2.47 basis points** |
-
-The last row is the one that matters. Three cells out of two hundred still
-disagree. Rather than report that as "98.5% accurate", the learned policy is
-evaluated exactly — the same Bellman backup, without the max — and the
-difference in expected value taken. The mismatches cost 2.47 bps against a
-house edge of 242 bps: about 1% of the edge the game already takes. They sit
-where standing and hitting are worth almost the same, so choosing wrongly
-costs almost nothing.
+Matching published figures to five significant figures is what licenses using
+this as ground truth. Two further independent checks follow.
 
 ---
 
