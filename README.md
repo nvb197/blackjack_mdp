@@ -32,7 +32,7 @@ second step, which is the more interesting half of the project.
 
 ## Quick start
 
-Needs Python 3.10 or later (the code uses `X | None` type hints).
+Needs Python 3.10 or later .
 
 ```bash
 pip install -r requirements.txt
