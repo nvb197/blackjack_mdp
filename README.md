@@ -1,9 +1,5 @@
 # Blackjack: RL against an exact answer
 
-Most reinforcement learning projects can't tell you how wrong they are. The
-agent produces a policy, the policy looks reasonable, and there's nothing to
-compare it against.
-
 Blackjack with replacement is small enough to solve exactly. It's a finite MDP
 with 200 decision states, and the transition probabilities come from the card
 distribution rather than from simulation. So I can compute the optimal policy
